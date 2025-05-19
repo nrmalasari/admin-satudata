@@ -5,6 +5,8 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Carbon;
 
 class Organization extends Model
 {
@@ -17,11 +19,14 @@ class Organization extends Model
         'description',
         'sector_id',
         'dataset_count',
-        'last_updated'
+        'last_updated',
+    ];
+
+    protected $casts = [
+        'last_updated' => 'datetime',
     ];
 
     protected $appends = ['logo_url'];
-    protected $withCount = ['datasets'];
 
     public static function boot()
     {
@@ -33,13 +38,6 @@ class Organization extends Model
 
         static::updating(function ($organization) {
             $organization->slug = Str::slug($organization->name);
-        });
-
-        static::saved(function ($organization) {
-            $organization->updateQuietly([
-                'dataset_count' => $organization->datasets()->count(),
-                'last_updated' => $organization->datasets()->latest()->first()?->updated_at
-            ]);
         });
     }
 
@@ -53,19 +51,38 @@ class Organization extends Model
         return $this->hasMany(Dataset::class);
     }
 
+    public function customDatasets()
+    {
+        return $this->hasMany(CustomDatasetTable::class);
+    }
+
     public function getLogoUrlAttribute()
     {
-        return $this->logo_path ? asset('storage/' . $this->logo_path) : null;
+        return $this->logo_path ? asset('storage/' . $this->logo_path) : asset('images/default-organization.png');
     }
 
-    public function getNameWithDatasetsAttribute()
+    public function getLastUpdatedFormattedAttribute()
     {
-        return "{$this->name} ({$this->datasets_count} dataset)";
+        return $this->last_updated ? $this->last_updated->locale('id')->translatedFormat('d F Y') : 'Belum pernah diperbarui';
     }
 
-    public function scopeSearch($query, $term)
+    public function getLastUpdatedAttribute($value)
     {
-        return $query->where('name', 'like', "%{$term}%")
-                    ->orWhere('description', 'like', "%{$term}%");
+        try {
+            return $value ? Carbon::parse($value) : null;
+        } catch (\Exception $e) {
+            Log::error('Invalid last_updated format for organization ID ' . $this->id . ': ' . $value);
+            return null;
+        }
+    }
+
+    public function getDatasetCountAttribute()
+    {
+        try {
+            return $this->datasets()->count() + $this->customDatasets()->count();
+        } catch (\Exception $e) {
+            Log::error('Error calculating dataset_count for organization ID ' . $this->id . ': ' . $e->getMessage());
+            return 0;
+        }
     }
 }

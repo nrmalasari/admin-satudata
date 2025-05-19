@@ -34,4 +34,9 @@ class Sector extends Model
     {
         return $this->hasMany(\App\Models\Organization::class);
     }
+
+    public function customDatasetTables()
+    {
+        return $this->hasMany(CustomDatasetTable::class);
+    }
 }

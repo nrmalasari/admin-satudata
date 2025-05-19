@@ -63,20 +63,23 @@ class OrganizationResource extends Resource
                     
                 Tables\Columns\TextColumn::make('sector.name')
                     ->label('Sektor')
-                    ->sortable(),
+                    ->sortable()
+                    ->formatStateUsing(fn ($state, $record) => $record->sector ? $record->sector->name : 'Tidak ada sektor'),
                     
-                Tables\Columns\TextColumn::make('datasets_count')
+                Tables\Columns\TextColumn::make('dataset_count')
                     ->label('Jumlah Dataset')
                     ->numeric()
                     ->sortable(),
                     
                 Tables\Columns\TextColumn::make('last_updated')
                     ->label('Update Terakhir')
-                    ->dateTime('d F Y H:i')
+                    ->dateTime('d F Y')
                     ->sortable(),
             ])
             ->filters([
-                // Add filters if needed
+                Tables\Filters\SelectFilter::make('sector_id')
+                    ->relationship('sector', 'name')
+                    ->label('Sektor'),
             ])
             ->actions([
                 Tables\Actions\EditAction::make(),
@@ -98,9 +101,7 @@ class OrganizationResource extends Resource
 
     public static function getRelations(): array
     {
-        return [
-            // Add relation managers if needed
-        ];
+        return [];
     }
 
     public static function getPages(): array

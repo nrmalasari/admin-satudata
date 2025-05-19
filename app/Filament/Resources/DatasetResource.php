@@ -4,13 +4,17 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\DatasetResource\Pages;
 use App\Models\Dataset;
+use App\Models\CustomDatasetTable;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
-use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Support\Collection;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
+use Illuminate\Support\Facades\Log;
 
 class DatasetResource extends Resource
 {
@@ -24,20 +28,46 @@ class DatasetResource extends Resource
     {
         return $form
             ->schema([
-                Forms\Components\Section::make('Dataset Information')
+                Forms\Components\Section::make('Informasi Dataset')
                     ->schema([
                         Forms\Components\TextInput::make('title')
                             ->required()
                             ->maxLength(255)
                             ->columnSpanFull(),
                             
+                        Forms\Components\Textarea::make('description')
+                            ->columnSpanFull(),
+                            
                         Forms\Components\Select::make('organization_id')
                             ->relationship('organization', 'name')
-                            ->required(),
+                            ->required()
+                            ->searchable()
+                            ->preload()
+                            ->afterStateUpdated(function ($state, $set) {
+                                Log::info("Selected organization_id: {$state}");
+                            }),
                             
                         Forms\Components\Select::make('sector_id')
                             ->relationship('sector', 'name')
-                            ->required(),
+                            ->required()
+                            ->searchable()
+                            ->preload(),
+                            
+                        Forms\Components\Select::make('custom_dataset_table_id')
+                            ->label('Sumber Tabel Kustom')
+                            ->options(fn () => CustomDatasetTable::where('is_public', true)->pluck('title', 'id'))
+                            ->searchable()
+                            ->preload()
+                            ->afterStateUpdated(function ($state, $set, $get) {
+                                if ($state) {
+                                    $table = CustomDatasetTable::find($state);
+                                    if ($table && $table->organization_id) {
+                                        $set('organization_id', $table->organization_id);
+                                        Log::info("Set organization_id to {$table->organization_id} from custom_dataset_table_id {$state}");
+                                    }
+                                }
+                            })
+                            ->hiddenOn('create'),
                             
                         Forms\Components\DatePicker::make('published_date')
                             ->default(now())
@@ -50,9 +80,10 @@ class DatasetResource extends Resource
                             })
                             ->required()
                             ->default(now()->year),
-                    ])->columns(2),
+                    ])
+                    ->columns(2),
                     
-                Forms\Components\Section::make('File Upload')
+                Forms\Components\Section::make('File Dataset')
                     ->schema([
                         Forms\Components\FileUpload::make('file_path')
                             ->required()
@@ -69,7 +100,7 @@ class DatasetResource extends Resource
                                 fn (TemporaryUploadedFile $file): string => (string) Str::of($file->getClientOriginalName())
                                     ->prepend(now()->timestamp.'_')
                             )
-                            ->afterStateUpdated(function ($state, $set) {
+                            ->afterStateUpdated(function ($state, $set, $get) {
                                 if ($state) {
                                     $originalName = $state->getClientOriginalName();
                                     $extension = strtolower($state->getClientOriginalExtension());
@@ -77,6 +108,11 @@ class DatasetResource extends Resource
                                     $set('file_name', $originalName);
                                     $set('file_type', self::getFileType($extension));
                                     $set('file_size', self::formatBytes($state->getSize()));
+                                    
+                                    if ($get('custom_dataset_table_id') && empty($get('title'))) {
+                                        $table = CustomDatasetTable::find($get('custom_dataset_table_id'));
+                                        $set('title', $table?->title ?? $originalName);
+                                    }
                                 }
                             })
                             ->downloadable()
@@ -89,22 +125,34 @@ class DatasetResource extends Resource
                         Forms\Components\Hidden::make('file_size'),
                     ]),
                     
-                Forms\Components\Section::make('Settings')
+                Forms\Components\Section::make('Pengaturan')
                     ->schema([
                         Forms\Components\Toggle::make('is_public')
                             ->default(true)
-                            ->label('Make this dataset publicly accessible'),
+                            ->label('Akses Publik'),
                             
                         Forms\Components\Toggle::make('is_featured')
                             ->default(false)
-                            ->label('Feature this dataset'),
-                    ])->columns(2),
+                            ->label('Ditampilkan'),
+                            
+                        Forms\Components\TagsInput::make('tags')
+                            ->label('Tag')
+                            ->columnSpanFull(),
+                    ])
+                    ->columns(2),
             ]);
     }
 
     public static function table(Table $table): Table
     {
         return $table
+            ->modifyQueryUsing(function (\Illuminate\Database\Eloquent\Builder $query) {
+                Log::info('Dataset query executed', [
+                    'sql' => $query->toSql(),
+                    'bindings' => $query->getBindings(),
+                ]);
+                return $query->with(['customDatasetTable', 'organization', 'sector']);
+            })
             ->columns([
                 Tables\Columns\TextColumn::make('title')
                     ->searchable()
@@ -112,34 +160,32 @@ class DatasetResource extends Resource
                     ->description(fn (Dataset $record): string => Str::limit($record->description ?? '', 50)),
                     
                 Tables\Columns\TextColumn::make('organization.name')
-                    ->label('Organization')
+                    ->label('Organisasi')
                     ->sortable(),
                     
                 Tables\Columns\TextColumn::make('sector.name')
-                    ->label('Sector')
+                    ->label('Sektor')
                     ->sortable(),
                     
-                Tables\Columns\TextColumn::make('year')
-                    ->sortable()
-                    ->searchable(),
-                    
-                Tables\Columns\TextColumn::make('file_name')
-                    ->label('File Name')
+                Tables\Columns\TextColumn::make('customDatasetTable.title')
+                    ->label('Sumber Tabel')
                     ->searchable()
                     ->toggleable(isToggledHiddenByDefault: true),
                     
+                Tables\Columns\TextColumn::make('year')
+                    ->sortable(),
+                    
                 Tables\Columns\TextColumn::make('file_type')
-                    ->label('File Type')
-                    ->formatStateUsing(fn (string $state): string => self::formatFileType($state))
+                    ->label('Tipe File')
                     ->badge()
                     ->color(fn (string $state): string => self::getFileTypeColor($state)),
                     
                 Tables\Columns\TextColumn::make('file_size')
-                    ->label('File Size'),
+                    ->label('Ukuran'),
                     
                 Tables\Columns\TextColumn::make('file_path')
-                    ->label('Download')
-                    ->formatStateUsing(fn ($state): string => 'Download File')
+                    ->label('Unduh')
+                    ->formatStateUsing(fn () => 'Unduh')
                     ->url(fn (Dataset $record): string => asset('storage/'.$record->file_path))
                     ->openUrlInNewTab()
                     ->icon('heroicon-o-arrow-down-tray')
@@ -147,13 +193,11 @@ class DatasetResource extends Resource
                     
                 Tables\Columns\IconColumn::make('is_public')
                     ->boolean()
-                    ->label('Public')
-                    ->sortable(),
+                    ->label('Publik'),
                     
                 Tables\Columns\IconColumn::make('is_featured')
                     ->boolean()
-                    ->label('Featured')
-                    ->sortable(),
+                    ->label('Featured'),
                     
                 Tables\Columns\TextColumn::make('published_date')
                     ->date()
@@ -163,38 +207,60 @@ class DatasetResource extends Resource
             ->filters([
                 Tables\Filters\SelectFilter::make('year')
                     ->options(function () {
-                        $years = Dataset::select('year')
+                        return Dataset::select('year')
                             ->distinct()
                             ->orderBy('year', 'desc')
                             ->pluck('year', 'year')
                             ->toArray();
-                            
-                        return array_filter($years);
                     })
-                    ->label('Filter by Year'),
+                    ->label('Tahun'),
                     
                 Tables\Filters\SelectFilter::make('organization_id')
                     ->relationship('organization', 'name')
-                    ->label('Organization'),
+                    ->label('Organisasi'),
                     
                 Tables\Filters\SelectFilter::make('sector_id')
                     ->relationship('sector', 'name')
-                    ->label('Sector'),
+                    ->label('Sektor'),
                     
                 Tables\Filters\TernaryFilter::make('is_public')
-                    ->label('Public Status'),
+                    ->label('Status Publik')
+                    ->default(null),
                     
                 Tables\Filters\TernaryFilter::make('is_featured')
-                    ->label('Featured Status'),
+                    ->label('Status Featured')
+                    ->default(null),
+                    
+                Tables\Filters\SelectFilter::make('custom_dataset_table_id')
+                    ->options(fn () => CustomDatasetTable::where('is_public', true)->pluck('title', 'id'))
+                    ->label('Sumber Tabel Kustom'),
             ])
             ->actions([
                 Tables\Actions\ViewAction::make(),
                 Tables\Actions\EditAction::make(),
-                Tables\Actions\DeleteAction::make(),
+                Tables\Actions\DeleteAction::make()
+                    ->before(function (Dataset $record) {
+                        Storage::disk('public')->delete($record->file_path);
+                    }),
+                    
+                Tables\Actions\Action::make('preview')
+                    ->label('Pratinjau')
+                    ->icon('heroicon-o-eye')
+                    ->modalContent(function (Dataset $record) {
+                        return view('filament.preview.dataset', [
+                            'record' => $record->load(['customDatasetTable', 'organization', 'sector'])
+                        ]);
+                    })
+                    ->modalWidth('7xl'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\DeleteBulkAction::make()
+                        ->before(function (Collection $records) {
+                            $records->each(function (Dataset $record) {
+                                Storage::disk('public')->delete($record->file_path);
+                            });
+                        }),
                 ]),
             ])
             ->emptyStateActions([
