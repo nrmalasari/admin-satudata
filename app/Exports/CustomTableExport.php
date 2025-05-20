@@ -9,6 +9,7 @@ use Maatwebsite\Excel\Concerns\ShouldAutoSize;
 use Maatwebsite\Excel\Concerns\WithMapping;
 use Maatwebsite\Excel\Concerns\WithStyles;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
+use Illuminate\Support\Facades\Log;
 
 class CustomTableExport implements FromArray, WithHeadings, WithTitle, ShouldAutoSize, WithMapping, WithStyles
 {
@@ -17,6 +18,10 @@ class CustomTableExport implements FromArray, WithHeadings, WithTitle, ShouldAut
 
     public function __construct(array $data, $columns)
     {
+        Log::info('Inisialisasi CustomTableExport:', [
+            'jumlah_data' => count($data),
+            'kolom' => $columns->toArray()
+        ]);
         $this->data = $data;
         $this->columns = $columns;
     }
@@ -28,35 +33,44 @@ class CustomTableExport implements FromArray, WithHeadings, WithTitle, ShouldAut
 
     public function headings(): array
     {
-        return $this->columns->pluck('header')->toArray();
+        $headings = $this->columns->pluck('header')->toArray();
+        Log::info('Header ekspor:', ['header' => $headings]);
+        return $headings;
     }
 
     public function map($row): array
     {
+        Log::info('Memetakan baris:', ['baris' => $row]);
         $mapped = [];
         foreach ($this->columns as $column) {
             $value = $row[$column->name] ?? null;
-            
+            Log::info('Memetakan kolom:', [
+                'kolom' => $column->name,
+                'tipe' => $column->type,
+                'nilai' => $value
+            ]);
+
             switch ($column->type) {
                 case 'date':
                     $mapped[] = $value ? \Carbon\Carbon::parse($value)->format('d/m/Y') : '';
                     break;
                 case 'float':
-                    $mapped[] = number_format((float)$value, 2);
+                    $mapped[] = $value !== null ? number_format((float)$value, 2, ',', '.') : '';
                     break;
                 case 'integer':
-                    $mapped[] = number_format((int)$value, 0);
+                    $mapped[] = $value !== null ? number_format((int)$value, 0, ',', '.') : '';
                     break;
                 default:
-                    $mapped[] = $value;
+                    $mapped[] = $value ?? '';
             }
         }
+        Log::info('Baris yang dipetakan:', ['mapped' => $mapped]);
         return $mapped;
     }
 
     public function title(): string
     {
-        return 'Data Export';
+        return 'Data Ekspor';
     }
 
     public function styles(Worksheet $sheet)

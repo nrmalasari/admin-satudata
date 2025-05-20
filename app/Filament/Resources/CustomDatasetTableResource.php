@@ -142,7 +142,7 @@ class CustomDatasetTableResource extends Resource
                     ->label('Pratinjau')
                     ->icon('heroicon-o-eye')
                     ->modalContent(function ($record) {
-                        Log::info('Menampilkan pratinjau untuk tabel ID: ' . $record->id . ' - Tidak ada penyimpanan');
+                        Log::info('Menampilkan pratinjau untuk tabel ID: ' . $record->id);
                         $record->load('organization', 'sector');
                         $columns = $record->columns()->orderBy('order_index')->get();
                         $rows = $record->rows()->limit(10)->get();
@@ -198,30 +198,62 @@ class CustomDatasetTableResource extends Resource
     public static function exportToExcel($record)
     {
         try {
-            Log::info('Memulai ekspor Excel untuk tabel: ' . $record->title);
+            Log::info('Memulai ekspor Excel untuk tabel: ' . $record->title, [
+                'table_id' => $record->id
+            ]);
 
+            // Ambil kolom yang visible
             $columns = $record->columns()
                 ->where('visible', true)
                 ->orderBy('order_index')
                 ->get();
 
+            Log::info('Kolom yang diambil:', ['columns' => $columns->toArray()]);
+
             if ($columns->isEmpty()) {
                 throw new \Exception('Tidak ada kolom yang tersedia untuk diekspor.');
             }
 
-            $data = $record->rows()
-                ->get()
-                ->map(function ($row) use ($columns) {
-                    $rowData = [];
-                    foreach ($columns as $column) {
-                        $rowData[$column->name] = $row->data[$column->name] ?? null;
-                    }
-                    return $rowData;
-                })
-                ->toArray();
+            // Ambil baris
+            $rows = $record->rows()->get();
+            Log::info('Baris yang diambil:', [
+                'jumlah_baris' => $rows->count(),
+                'baris' => $rows->toArray()
+            ]);
 
+            if ($rows->isEmpty()) {
+                throw new \Exception('Tidak ada baris data untuk diekspor.');
+            }
+
+            // Proses data baris
+            $data = $rows->map(function ($row) use ($columns) {
+                $rowJson = is_array($row->data) ? $row->data : json_decode($row->data, true);
+
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    Log::warning('JSON tidak valid di data baris:', [
+                        'row_id' => $row->id,
+                        'data' => $row->data,
+                        'error' => json_last_error_msg()
+                    ]);
+                    return null;
+                }
+
+                $rowData = [];
+                foreach ($columns as $column) {
+                    $rowData[$column->name] = $rowJson[$column->name] ?? null;
+                }
+
+                return $rowData;
+            })->filter()->values()->toArray();
+
+            Log::info('Data yang dipersiapkan untuk ekspor:', ['data' => $data]);
+
+            if (empty($data)) {
+                throw new \Exception('Tidak ada data valid untuk diekspor setelah pemrosesan.');
+            }
+
+            // Buat file ekspor
             Storage::disk('public')->makeDirectory('datasets/exports');
-
             $fileName = Str::slug($record->title) . '_' . now()->format('YmdHis') . '.xlsx';
             $filePath = 'datasets/exports/' . $fileName;
             $fullPath = Storage::disk('public')->path($filePath);
@@ -233,22 +265,22 @@ class CustomDatasetTableResource extends Resource
             );
 
             if (!file_exists($fullPath)) {
-                throw new \Exception('Gagal membuat file Excel');
+                throw new \Exception('Gagal membuat file Excel.');
             }
 
             return response()->download($fullPath)
                 ->deleteFileAfterSend(true);
-                
         } catch (\Exception $e) {
             if (isset($filePath)) {
                 Storage::disk('public')->delete($filePath);
             }
-            
+
             Log::error('Error saat ekspor Excel:', [
                 'message' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
+                'table_id' => $record->id,
             ]);
-            
+
             return redirect()->back()
                 ->with('error', 'Gagal mengekspor: ' . $e->getMessage());
         }
@@ -259,32 +291,54 @@ class CustomDatasetTableResource extends Resource
         try {
             DB::beginTransaction();
 
-            Log::info('Memulai publikasi dataset untuk tabel: ' . $record->id);
+            Log::info('Memulai publikasi dataset untuk tabel: ' . $record->title, [
+                'table_id' => $record->id
+            ]);
 
             if (!$record->exists) {
-                throw new \Exception('Tabel tidak valid');
+                throw new \Exception('Tabel tidak valid.');
             }
-            if ($record->rows()->count() === 0) {
-                throw new \Exception('Tidak ada data untuk dipublikasikan');
-            }
+
+            // Ambil kolom
             $columns = $record->columns()->where('visible', true)->orderBy('order_index')->get();
             if ($columns->isEmpty()) {
-                throw new \Exception('Tidak ada kolom yang valid untuk dipublikasikan');
+                throw new \Exception('Tidak ada kolom yang valid untuk dipublikasikan.');
             }
 
-            $data = $record->rows()
-                ->get()
-                ->map(function ($row) use ($columns) {
-                    $rowData = [];
-                    foreach ($columns as $column) {
-                        $rowData[$column->header] = $row->data[$column->name] ?? null;
-                    }
-                    return $rowData;
-                })
-                ->toArray();
+            // Ambil baris
+            $rows = $record->rows()->get();
+            if ($rows->isEmpty()) {
+                throw new \Exception('Tidak ada data untuk dipublikasikan.');
+            }
 
-            Log::info('Jumlah kolom: ' . $columns->count() . ', Jumlah baris: ' . count($data));
+            // Proses data baris
+            $data = $rows->map(function ($row) use ($columns) {
+                $rowJson = is_array($row->data) ? $row->data : json_decode($row->data, true);
 
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    Log::warning('JSON tidak valid di data baris:', [
+                        'row_id' => $row->id,
+                        'data' => $row->data,
+                        'error' => json_last_error_msg()
+                    ]);
+                    return null;
+                }
+
+                $rowData = [];
+                foreach ($columns as $column) {
+                    $rowData[$column->name] = $rowJson[$column->name] ?? null;
+                }
+
+                return $rowData;
+            })->filter()->values()->toArray();
+
+            Log::info('Data yang dipersiapkan untuk publikasi:', ['data' => $data]);
+
+            if (empty($data)) {
+                throw new \Exception('Tidak ada data valid untuk dipublikasikan setelah pemrosesan.');
+            }
+
+            // Buat file dataset
             Storage::disk('public')->makeDirectory('datasets');
             $fileName = Str::slug($record->title) . '_dataset_' . now()->format('YmdHis') . '.xlsx';
             $filePath = 'datasets/' . $fileName;
@@ -295,26 +349,31 @@ class CustomDatasetTableResource extends Resource
                 'public'
             );
 
+            $fullPath = Storage::disk('public')->path($filePath);
+            if (!file_exists($fullPath)) {
+                throw new \Exception('Gagal membuat file Excel untuk publikasi.');
+            }
+
+            // Buat dataset
             $dataset = Dataset::createFromCustomTable($record, $filePath);
 
             DB::commit();
 
             return redirect()->route('filament.admin.resources.datasets.view', ['record' => $dataset->id])
                 ->with('success', 'Tabel berhasil dipublikasikan sebagai Dataset!');
-                
         } catch (\Exception $e) {
             DB::rollBack();
-            
+
             if (isset($filePath)) {
                 Storage::disk('public')->delete($filePath);
             }
-            
-            Log::error('Error publikasi dataset:', [
+
+            Log::error('Error saat publikasi dataset:', [
                 'message' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
                 'table_id' => $record->id,
             ]);
-            
+
             return redirect()->back()
                 ->with('error', 'Gagal mempublikasikan: ' . $e->getMessage());
         }
@@ -338,13 +397,13 @@ class CustomDatasetTableResource extends Resource
             
             return redirect()->back()
                 ->with('success', 'Publikasi dataset berhasil dibatalkan!');
-                
         } catch (\Exception $e) {
             DB::rollBack();
             
-            Log::error('Error unpublish dataset:', [
+            Log::error('Error saat membatalkan publikasi dataset:', [
                 'message' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
+                'table_id' => $record->id,
             ]);
             
             return redirect()->back()

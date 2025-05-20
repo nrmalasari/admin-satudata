@@ -6,6 +6,8 @@ Route::group(['prefix' => 'v1', 'as' => 'api.'], function() {
     Route::get('/sectors', [\App\Http\Controllers\Api\SectorController::class, 'index']);
     Route::get('/organizations', [\App\Http\Controllers\Api\OrganizationController::class, 'index']);
     Route::get('/organizations/{id}', [\App\Http\Controllers\Api\OrganizationController::class, 'show']);
+    Route::get('/organizations/{organizationId}/tables/{tableId}', [\App\Http\Controllers\Api\CustomDatasetTableController::class, 'show']);
+    Route::get('/tables/{id}', [\App\Http\Controllers\Api\CustomDatasetTableController::class, 'show']);
     
 
     Route::get('/datasets', [\App\Http\Controllers\Api\DatasetController::class, 'index']);
